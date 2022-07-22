@@ -1,14 +1,12 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
-	"io"
 	"net/url"
-	"os"
 
 	"github.com/JoaoBraveCoding/prom-storage-analysis/pkg/parser"
 	"github.com/JoaoBraveCoding/prom-storage-analysis/pkg/prom"
+	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
 )
 
 func check(e error) {
@@ -19,35 +17,25 @@ func check(e error) {
 
 func main() {
 
-	file, err := os.Open(os.Args[1])
-	check(err)
-	defer file.Close()
-
-	// Start reading from the file with a reader.
-	reader := bufio.NewReader(file)
-
-	var line string
-	var expression string
 	var expressions []string
-	for {
-		line, err = reader.ReadString('\n')
-		if len(line) != 1 {
-			expression += line
-		} else {
-			if expression != "" {
-				expressions = append(expressions, expression)
-				expression = ""
+	url := &url.URL{
+		Host:   "localhost:9090",
+		Scheme: "http",
+		Path:   "/",
+	}
+	promRules := prom.GetRules(url)
+
+	for _, group := range promRules.Groups {
+		for _, r := range group.Rules {
+			switch v := r.(type) {
+			case v1.RecordingRule:
+				expressions = append(expressions, v.Query)
+			case v1.AlertingRule:
+				expressions = append(expressions, v.Query)
+			default:
+				return
 			}
 		}
-
-		if err != nil {
-			expressions = append(expressions, expression)
-			break
-		}
-	}
-
-	if err != io.EOF {
-		fmt.Printf(" > Failed!: %v\n", err)
 	}
 
 	mapOfMetrics := make(map[string]bool)
@@ -60,12 +48,7 @@ func main() {
 		}
 	}
 
-	url := &url.URL{
-		Host:   "localhost:9090",
-		Scheme: "http",
-		Path:   "/",
-	}
 	for metric := range mapOfMetrics {
-		fmt.Printf("%s %d\n", metric, size.SeriesPerMetric(url, metric, "", ""))
+		fmt.Printf("%s %d\n", metric, prom.SeriesPerMetric(url, metric, "", ""))
 	}
 }

@@ -1,4 +1,4 @@
-package size
+package prom
 
 import (
 	"context"
@@ -16,6 +16,34 @@ import (
 )
 
 const failureExitCode = -1
+
+func GetRules(url *url.URL) v1.RulesResult {
+	if url.Scheme == "" {
+		url.Scheme = "http"
+	}
+	config := api.Config{
+		Address: url.String(),
+	}
+
+	// Create new client.
+	c, err := api.NewClient(config)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error creating API client:", err)
+		return v1.RulesResult{}
+	}
+
+	// Run query against client.
+	api := v1.NewAPI(c)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	rules, err := api.Rules(ctx)
+
+	cancel()
+	if err != nil {
+		return v1.RulesResult{}
+	}
+
+	return rules
+}
 
 func SeriesPerMetric(url *url.URL, matcher string, start, end string) int {
 	if url.Scheme == "" {
@@ -42,7 +70,7 @@ func SeriesPerMetric(url *url.URL, matcher string, start, end string) int {
 	api := v1.NewAPI(c)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	val, _, err := api.Series(ctx, []string{matcher}, stime, etime) // Ignoring warnings for now.
-	
+
 	cancel()
 	if err != nil {
 		return handleAPIError(err)
