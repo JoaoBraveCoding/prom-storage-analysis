@@ -4,8 +4,11 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+
 	"github.com/JoaoBraveCoding/prom-storage-analysis/pkg/parser"
+	"github.com/JoaoBraveCoding/prom-storage-analysis/pkg/prom"
 )
 
 func check(e error) {
@@ -57,7 +60,12 @@ func main() {
 		}
 	}
 
-	for metric := range mapOfMetrics{
-		fmt.Println(metric)
+	url := &url.URL{
+		Host:   "localhost:9090",
+		Scheme: "http",
+		Path:   "/",
+	}
+	for metric := range mapOfMetrics {
+		fmt.Printf("%s %d\n", metric, size.SeriesPerMetric(url, metric, "", ""))
 	}
 }
