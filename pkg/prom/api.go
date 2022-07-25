@@ -17,6 +17,26 @@ import (
 
 const failureExitCode = -1
 
+func GetUsedExprInRules(url *url.URL) (expressions []string) {
+	promRules := GetRules(url)
+
+	for _, group := range promRules.Groups {
+		for _, r := range group.Rules {
+			switch v := r.(type) {
+			case v1.RecordingRule:
+				expressions = append(expressions, v.Query)
+			case v1.AlertingRule:
+				expressions = append(expressions, v.Query)
+			default:
+				fmt.Fprintln(os.Stderr, "error when parsing rules found rule which is not an AlertingRule nor a RecordingRule")
+				os.Exit(1)
+			}
+		}
+	}
+
+	return expressions
+}
+
 func GetRules(url *url.URL) v1.RulesResult {
 	if url.Scheme == "" {
 		url.Scheme = "http"
@@ -39,6 +59,7 @@ func GetRules(url *url.URL) v1.RulesResult {
 
 	cancel()
 	if err != nil {
+		fmt.Fprintln(os.Stderr, "error when preforming get to Rules endpoint:", err)
 		return v1.RulesResult{}
 	}
 

@@ -1,42 +1,34 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"net/url"
+	"os"
 
 	"github.com/JoaoBraveCoding/prom-storage-analysis/pkg/parser"
 	"github.com/JoaoBraveCoding/prom-storage-analysis/pkg/prom"
-	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
 )
 
-func check(e error) {
-	if e != nil {
-		panic(e)
-	}
+var (
+	server *string
+)
+
+func init() {
+	server = flag.String("url", "http://localhost:9090/", "server")
 }
 
 func main() {
 
-	var expressions []string
-	url := &url.URL{
-		Host:   "localhost:9090",
-		Scheme: "http",
-		Path:   "/",
-	}
-	promRules := prom.GetRules(url)
+	flag.Parse()
 
-	for _, group := range promRules.Groups {
-		for _, r := range group.Rules {
-			switch v := r.(type) {
-			case v1.RecordingRule:
-				expressions = append(expressions, v.Query)
-			case v1.AlertingRule:
-				expressions = append(expressions, v.Query)
-			default:
-				return
-			}
-		}
+	parsedURL, err := url.Parse(*server)
+	if err != nil {
+		fmt.Println(fmt.Errorf("error while parsing server variable, %s", err))
+		os.Exit(1)
 	}
+
+	expressions := prom.GetUsedExprInRules(parsedURL)
 
 	mapOfMetrics := make(map[string]bool)
 	for _, expr := range expressions {
@@ -49,6 +41,6 @@ func main() {
 	}
 
 	for metric := range mapOfMetrics {
-		fmt.Printf("%s %d\n", metric, prom.SeriesPerMetric(url, metric, "", ""))
+		fmt.Printf("%s %d\n", metric, prom.SeriesPerMetric(parsedURL, metric, "", ""))
 	}
 }
