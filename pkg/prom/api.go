@@ -13,12 +13,42 @@ import (
 
 	"github.com/prometheus/client_golang/api"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
+	"github.com/prometheus/common/config"
 )
 
 const failureExitCode = -1
 
-func GetUsedExprInRules(url *url.URL) (expressions []string) {
-	promRules := GetRules(url)
+var client api.Client
+
+func SetUpClient(server, bearertoken string) error {
+	url, err := url.Parse(server)
+	if err != nil {
+		return fmt.Errorf("error while parsing server variable, %s", err)
+	}
+
+	if url.Scheme == "" {
+		url.Scheme = "http"
+	}
+
+	roundTripper := api.DefaultRoundTripper
+	if bearertoken != "" {
+		roundTripper = config.NewAuthorizationCredentialsRoundTripper("Bearer", config.Secret(bearertoken), api.DefaultRoundTripper)
+	}
+
+	// Create new client.
+	client, err = api.NewClient(api.Config{
+		Address:      url.String(),
+		RoundTripper: roundTripper,
+	})
+	if err != nil {
+		return fmt.Errorf("error creating API client: %s", err)
+	}
+
+	return nil
+}
+
+func GetUsedExprInRules() (expressions []string) {
+	promRules := GetRules()
 
 	for _, group := range promRules.Groups {
 		for _, r := range group.Rules {
@@ -37,23 +67,9 @@ func GetUsedExprInRules(url *url.URL) (expressions []string) {
 	return expressions
 }
 
-func GetRules(url *url.URL) v1.RulesResult {
-	if url.Scheme == "" {
-		url.Scheme = "http"
-	}
-	config := api.Config{
-		Address: url.String(),
-	}
-
-	// Create new client.
-	c, err := api.NewClient(config)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "error creating API client:", err)
-		return v1.RulesResult{}
-	}
-
+func GetRules() v1.RulesResult {
 	// Run query against client.
-	api := v1.NewAPI(c)
+	api := v1.NewAPI(client)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	rules, err := api.Rules(ctx)
 
@@ -66,21 +82,7 @@ func GetRules(url *url.URL) v1.RulesResult {
 	return rules
 }
 
-func SeriesPerMetric(url *url.URL, matcher string, start, end string) int {
-	if url.Scheme == "" {
-		url.Scheme = "http"
-	}
-	config := api.Config{
-		Address: url.String(),
-	}
-
-	// Create new client.
-	c, err := api.NewClient(config)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "error creating API client:", err)
-		return failureExitCode
-	}
-
+func SeriesPerMetric(matcher string, start, end string) int {
 	stime, etime, err := parseStartTimeAndEndTime(start, end)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -88,7 +90,7 @@ func SeriesPerMetric(url *url.URL, matcher string, start, end string) int {
 	}
 
 	// Run query against client.
-	api := v1.NewAPI(c)
+	api := v1.NewAPI(client)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	val, _, err := api.Series(ctx, []string{matcher}, stime, etime) // Ignoring warnings for now.
 
@@ -102,8 +104,8 @@ func SeriesPerMetric(url *url.URL, matcher string, start, end string) int {
 
 func parseStartTimeAndEndTime(start, end string) (time.Time, time.Time, error) {
 	var (
-		minTime = time.Now().Add(-9999 * time.Hour)
-		maxTime = time.Now().Add(9999 * time.Hour)
+		minTime = time.Now().Add(-2 * time.Hour)
+		maxTime = time.Now().Add(2 * time.Hour)
 		err     error
 	)
 
@@ -146,4 +148,9 @@ func handleAPIError(err error) int {
 	}
 
 	return failureExitCode
+}
+
+func ValidateTime(s string) error {
+	_, err := parseTime(s)
+	return err
 }
