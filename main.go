@@ -12,14 +12,16 @@ import (
 )
 
 var (
-	server      *string
-	bearertoken *string
-	start       *string
-	end         *string
+	server          *string
+	pathToRulesFile *string
+	bearertoken     *string
+	start           *string
+	end             *string
 )
 
 func init() {
-	server = flag.String("url", "http://localhost:9090/", "server")
+	server = flag.String("server", "http://localhost:9090/", "Prometheus server URL")
+	pathToRulesFile = flag.String("rules-file", "", "Path to a rules file in json from a mustgather")
 	bearertoken = flag.String("bearer-token", "", "Bearer Token to connect to the server")
 	start = flag.String("start", "", "Start time (RFC3339 or Unix timestamp).")
 	end = flag.String("end", "", "End time (RFC3339 or Unix timestamp).")
@@ -34,17 +36,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := prom.ValidateTime(*start); *start != "" && err != nil{
+	if err := prom.ValidateTime(*start); *start != "" && err != nil {
 		log.Fatalf("error parameter start %s", err)
-		os.Exit(1)		
+		os.Exit(1)
 	}
 
-	if err := prom.ValidateTime(*end); *end != "" && err != nil{
+	if err := prom.ValidateTime(*end); *end != "" && err != nil {
 		log.Fatalf("error parameter end %s", err)
-		os.Exit(1)		
+		os.Exit(1)
 	}
 
-	expressions := prom.GetUsedExprInRules()
+	expressions := prom.GetUsedExprInRules(*pathToRulesFile)
 
 	mapOfMetrics := make(map[string]struct{})
 	for _, expr := range expressions {

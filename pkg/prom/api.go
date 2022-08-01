@@ -2,8 +2,11 @@ package prom
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
+	"log"
 	"math"
 	"net/url"
 	"os"
@@ -47,8 +50,13 @@ func SetUpClient(server, bearertoken string) error {
 	return nil
 }
 
-func GetUsedExprInRules() (expressions []string) {
-	promRules := GetRules()
+func GetUsedExprInRules(pathToRulesFile string) (expressions []string) {
+	var promRules v1.RulesResult
+	if pathToRulesFile == "" {
+		promRules = getRules()
+	} else {
+		promRules = getRulesFromFile(pathToRulesFile)
+	}
 
 	for _, group := range promRules.Groups {
 		for _, r := range group.Rules {
@@ -67,7 +75,7 @@ func GetUsedExprInRules() (expressions []string) {
 	return expressions
 }
 
-func GetRules() v1.RulesResult {
+func getRules() v1.RulesResult {
 	// Run query against client.
 	api := v1.NewAPI(client)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -80,6 +88,30 @@ func GetRules() v1.RulesResult {
 	}
 
 	return rules
+}
+
+func getRulesFromFile(pathToRulesFile string) v1.RulesResult {
+	jsonContent, err := os.Open(pathToRulesFile)
+	if err != nil {
+		log.Fatalf("error opening rules file: %s", err)
+	}
+	defer jsonContent.Close()
+
+	byteValue, _ := ioutil.ReadAll(jsonContent)
+
+	type data struct {
+		Groups []v1.RuleGroup
+	}
+
+	type rulesFile struct {
+		Status string
+		Data   data
+	}
+	var rules rulesFile
+
+	json.Unmarshal(byteValue, &rules)
+
+	return v1.RulesResult{Groups: rules.Data.Groups}
 }
 
 func SeriesPerMetric(matcher string, start, end string) int {
