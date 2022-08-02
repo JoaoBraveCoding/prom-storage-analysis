@@ -134,6 +134,56 @@ func SeriesPerMetric(matcher string, start, end string) int {
 	return len(val)
 }
 
+func GetJobsThatExportMetric(metric string) map[string]struct{} {
+	api := v1.NewAPI(client)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	metricsMetadata, err := api.TargetsMetadata(ctx, "", metric, "")
+
+	cancel()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error when preforming get to TargetMetadata endpoint:", err)
+		return map[string]struct{}{}
+	}
+
+	jobsNamespaces := make(map[string]struct{})
+	for _, metricMetadata := range metricsMetadata {
+		identifier := metricMetadata.Target["namespace"] + "/" + metricMetadata.Target["job"]
+		jobsNamespaces[identifier] = struct{}{}
+	}
+	return jobsNamespaces
+}
+
+func GetIdentifierPerScrapeConfig() map[string]map[string]struct{} {
+	api := v1.NewAPI(client)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	targets, err := api.Targets(ctx)
+
+	cancel()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error when preforming get to Targets endpoint:", err)
+		return map[string]map[string]struct{}{}
+	}
+
+	scrapeConfigIdentifiers := make(map[string]map[string]struct{})
+	for _, target := range targets.Active {
+		splitedScrapePool := strings.Split(target.ScrapePool, "/")
+		identifier := string(target.Labels["namespace"] + "/" + target.Labels["job"])
+		scrapeConfig := splitedScrapePool[1] + "/" + splitedScrapePool[2]
+		if identifiers, ok := scrapeConfigIdentifiers[scrapeConfig]; ok {
+			if _, ok := identifiers[identifier]; !ok {
+				identifiers[identifier] = struct{}{}
+			}
+		} else {
+			identifiers := make(map[string]struct{})
+			identifiers[identifier] = struct{}{}
+			scrapeConfigIdentifiers[scrapeConfig] = identifiers
+		}
+
+	}
+
+	return scrapeConfigIdentifiers
+}
+
 func parseStartTimeAndEndTime(start, end string) (time.Time, time.Time, error) {
 	var (
 		minTime = time.Now().Add(-2 * time.Hour)
