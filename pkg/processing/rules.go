@@ -3,6 +3,7 @@ package processing
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
 )
@@ -24,16 +25,18 @@ func Expressions(promRules v1.RulesResult) (expressions []string) {
 	return expressions
 }
 
-func PromRulesRecordingRules(promRules v1.RulesResult) map[string][]string {
-	promRulesRecordingRules := make(map[string][]string)
+func PromRulesRecordingRules(promRules v1.RulesResult) map[string]map[string]struct{} {
+	promRulesRecordingRules := make(map[string]map[string]struct{})
 	for _, group := range promRules.Groups {
-		promRulesRecordingRules[group.Name] = make([]string, 0)
+		promRule := strings.Split(group.File, "/")[len(strings.Split(group.File, "/"))-1]
+		if _, exists := promRulesRecordingRules[promRule]; !exists {
+			promRulesRecordingRules[promRule] = make(map[string]struct{})
+		}
 		for _, r := range group.Rules {
 			switch v := r.(type) {
 			case v1.RecordingRule:
-				promRulesRecordingRules[group.Name] = append(promRulesRecordingRules[group.Name], v.Name)
+				promRulesRecordingRules[promRule][v.Name] = struct{}{}
 			case v1.AlertingRule:
-				break
 			default:
 				fmt.Fprintln(os.Stderr, "error when parsing rules found rule which is not an AlertingRule nor a RecordingRule")
 				os.Exit(1)
@@ -43,17 +46,17 @@ func PromRulesRecordingRules(promRules v1.RulesResult) map[string][]string {
 	return promRulesRecordingRules
 }
 
-func PromRuleMetrics(promRulesRecordingRules map[string][]string, metricsIdentifiers map[string]map[string]struct{}) map[string][]string {
-	promRuleMetrics := make(map[string][]string)
+func PromRuleMetrics(promRulesRecordingRules, metricsIdentifiers map[string]map[string]struct{}) map[string][]string {
+	promRulesMetrics := make(map[string][]string)
 	for promRule, recordingRules := range promRulesRecordingRules {
-		promRuleMetrics[promRule] = make([]string, 0)
-		for _, recordingRule := range recordingRules {
+		promRulesMetrics[promRule] = make([]string, 0)
+		for recordingRule := range recordingRules {
 			if identifiers, ok := metricsIdentifiers[recordingRule]; ok {
 				if len(identifiers) == 0 {
-					promRuleMetrics[promRule] = append(promRuleMetrics[promRule], recordingRule)
+					promRulesMetrics[promRule] = append(promRulesMetrics[promRule], recordingRule)
 				}
 			}
 		}
 	}
-	return promRuleMetrics
+	return promRulesMetrics
 }
