@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/JoaoBraveCoding/prom-storage-analysis/pkg/processing"
 	"github.com/JoaoBraveCoding/prom-storage-analysis/pkg/prom"
@@ -76,6 +77,15 @@ func printMetricsPerMetricGenerator(pathToRules string) {
 	metricsIdentifiers := make(map[string]map[string]struct{})
 	for metric := range processing.Metrics(expressions) {
 		metricMetadata := prom.MetricMetadata(metric)
+		if len(metricMetadata) == 0 {
+			// Lookup for the parent metric name if it's a counter, histogram or summary.
+			for _, s := range []string{"_total", "_bucket", "_sum", "_count"} {
+				metricMetadata = prom.MetricMetadata(strings.TrimSuffix(metric, s))
+				if len(metricMetadata) > 0 {
+					break
+				}
+			}
+		}
 		metricsIdentifiers[metric] = processing.MetricIdentifiers(metric, metricMetadata)
 	}
 
@@ -110,7 +120,7 @@ func printMetricsPerMetricGenerator(pathToRules string) {
 					break
 				}
 			}
-			if !found {
+			if !found && prom.Series(metric, *start, *end) != 0 {
 				fmt.Println(metric)
 			}
 		}

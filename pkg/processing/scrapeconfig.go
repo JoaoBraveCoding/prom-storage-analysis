@@ -29,7 +29,7 @@ func ScrapeConfigsMetrics(scrapeConfigIdentifiers, metricsIdentifiers map[string
 	scrapeConfigMetrics := make(map[string][]string)
 	for scrapeConfig, scIdentifiers := range scrapeConfigIdentifiers {
 		var metricsExposed []string
-		for scIdentifier, _ := range scIdentifiers {
+		for scIdentifier := range scIdentifiers {
 			for metric, mIdentifier := range metricsIdentifiers {
 				if _, ok := mIdentifier[scIdentifier]; ok {
 					metricsExposed = append(metricsExposed, metric)
