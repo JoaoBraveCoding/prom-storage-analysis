@@ -32,7 +32,19 @@ func init() {
 func main() {
 
 	flag.Parse()
+	validateArguments()
+	
+	mapOfMetrics := getUsedMetricsInRules()
+	// By Service Monitor Command
+	if *byServiceMonitor {
+		printMetricsPerMetricGenerator(mapOfMetrics)
+		return
+	}
+	// Regular Command (Metrics & Nb of Series)
+	printMetricsAndNumberOfSeries(mapOfMetrics)
+}
 
+func validateArguments(){
 	if err := prom.SetUpClient(*server, *bearertoken); err != nil {
 		log.Fatalf("error could not set up client: %s", err)
 		os.Exit(1)
@@ -47,79 +59,128 @@ func main() {
 		log.Fatalf("error parameter end %s", err)
 		os.Exit(1)
 	}
+}
 
-	expressions := prom.GetUsedExprInRules(*pathToRulesFile)
+func getUsedMetricsInRules() map[string][]string {
+	expressions := prom.GetExprUsedInRules(*pathToRulesFile)
 
-	mapOfMetrics := make(map[string]struct{})
+	mapOfMetrics := make(map[string][]string)
 	for _, expr := range expressions {
 		metricsInExpr := parser.GetMetrics(expr)
 		for _, metric := range metricsInExpr {
 			if _, ok := mapOfMetrics[metric]; !ok {
-				mapOfMetrics[metric] = struct{}{}
+				mapOfMetrics[metric] = nil
 			}
 		}
 	}
 
-	sortedMetrics := make([]string, len(mapOfMetrics))
-	i := 0
-	for metric := range mapOfMetrics {
-		sortedMetrics[i] = metric
-		i++
+	return mapOfMetrics
+}
+
+func printMetricsAndNumberOfSeries(mapOfMetrics map[string][]string) {
+	sortedMetrics := toSortedArray(mapOfMetrics)
+	for _, metric := range sortedMetrics {
+		fmt.Printf("%s %d\n", metric, prom.SeriesPerMetric(metric, *start, *end))
 	}
-	sort.Strings(sortedMetrics)
+}
 
-	if !*byServiceMonitor {
-		for _, metric := range sortedMetrics {
-			fmt.Printf("%s %d\n", metric, prom.SeriesPerMetric(metric, *start, *end))
-		}
-	} else {
-		// Build map with metrics and possible identifiers
-		metricsIdentifier := make(map[string]map[string]struct{})
-		for _, metric := range sortedMetrics {
-			metricsIdentifier[metric] = prom.GetJobsThatExportMetric(metric)
-		}
+func printMetricsPerMetricGenerator(mapOfMetrics map[string][]string) {
+	// Build a map with metrics and possible identifiers.
+	// An identifier is the concatenaiton of namespace + / + job values
+	// that we get for each metric using the Targets Metadata endpoint
+	metricsIdentifier := make(map[string]map[string]struct{})
+	for metric := range mapOfMetrics {
+		metricsIdentifier[metric] = prom.GetJobsThatExportMetric(metric)
+	}
 
-		// Build map with ScrapeConfig and possible identifiers
-		scrapeConfigIdentifiers := prom.GetIdentifierPerScrapeConfig()
+	// Build map with ScrapeConfig and possible identifiers
+	scrapeConfigIdentifiers := prom.GetIdentifierPerScrapeConfig()
 
-		// Build map with ScrapeConfig and metrics which match one of his identifiers
-		scrapeConfigMetrics := make(map[string][]string)
-		for scrapeConfig, scIdentifiers := range scrapeConfigIdentifiers {
-			var metricsExposed []string
-			for scIdentifier, _ := range scIdentifiers {
-				for metric, mIdentifier := range metricsIdentifier {
-					if _, ok := mIdentifier[scIdentifier]; ok {
-						metricsExposed = append(metricsExposed, metric)
-					}
+	// Build map with ScrapeConfig and metrics which match one of his identifiers
+	scrapeConfigMetrics := make(map[string][]string)
+	for scrapeConfig, scIdentifiers := range scrapeConfigIdentifiers {
+		var metricsExposed []string
+		for scIdentifier, _ := range scIdentifiers {
+			for metric, mIdentifier := range metricsIdentifier {
+				if _, ok := mIdentifier[scIdentifier]; ok {
+					metricsExposed = append(metricsExposed, metric)
 				}
 			}
-			scrapeConfigMetrics[scrapeConfig] = metricsExposed
 		}
+		scrapeConfigMetrics[scrapeConfig] = metricsExposed
+	}
 
-		//Sorting
-		sortedScrapeConfig := make([]string, len(scrapeConfigMetrics))
-		i := 0
-		for scrapeConfig := range scrapeConfigMetrics {
-			sortedScrapeConfig[i] = scrapeConfig
-			i++
+	//Sorting
+	sortedScrapeConfig := toSortedArray(scrapeConfigMetrics)
+
+	//Printing
+	fmt.Println("Metrics Per ServiceMonitor")
+	printMapInOrder(scrapeConfigMetrics, sortedScrapeConfig)
+
+	recordingRulePerPromRule := prom.GetRecodringRulesPerPromRule(*pathToRulesFile)
+	promRuleMetrics := make(map[string][]string)
+	for promRule, recordingRules := range recordingRulePerPromRule {
+		promRuleMetrics[promRule] = make([]string, 0)
+		for _, recordingRule := range recordingRules {
+			if identifiers, ok := metricsIdentifier[recordingRule]; ok {
+				if len(identifiers) == 0 {
+					promRuleMetrics[promRule] = append(promRuleMetrics[promRule], recordingRule)
+				}
+			}
 		}
-		sort.Strings(sortedScrapeConfig)
+	}
 
-		//Printing
-		for _, scrapeConfig := range sortedScrapeConfig {
-			fmt.Println(scrapeConfig)
-			sort.Strings(scrapeConfigMetrics[scrapeConfig])
-			for _, metric := range scrapeConfigMetrics[scrapeConfig] {
+	//Sorting
+	sortedPromRule := toSortedArray(promRuleMetrics)
+
+	//Printing
+	fmt.Println("Metrics (recording rules) Per PrometheusRule")
+	printMapInOrder(promRuleMetrics, sortedPromRule)
+
+	// Metrics not anywhere
+	fmt.Println("Metrics not exported by Service Monitor nor by PrometheusRule")
+	for metric, identifiers := range metricsIdentifier {
+		if len(identifiers) == 0 {
+			found := false
+			for _, recordingRules := range promRuleMetrics {
+				for _, recordingRule := range recordingRules {
+					if recordingRule == metric {
+						found = true
+						break
+					}
+				}
+				if found {
+					break
+				}
+			}
+			if !found {
 				fmt.Println(metric)
 			}
-			fmt.Println("")
 		}
+	}
 
-		fmt.Println("Metrics without a Job/Namespace Label")
-		for metric, identifiers := range metricsIdentifier {
-			if len(identifiers) == 0 {
-				fmt.Println(metric)
-			}
+}
+
+func toSortedArray(m map[string][]string) []string {
+	sortedMap := make([]string, len(m))
+	i := 0
+	for promRule := range m {
+		sortedMap[i] = promRule
+		i++
+	}
+	sort.Strings(sortedMap)
+	return sortedMap
+}
+
+func printMapInOrder(m map[string][]string, order []string) {
+	for _, val := range order {
+		if len(m[val]) == 0 {
+			continue
+		}
+		fmt.Println(val)
+		sort.Strings(m[val])
+		for _, jVal := range m[val] {
+			fmt.Println(jVal)
 		}
 	}
 }
