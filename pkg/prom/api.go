@@ -2,6 +2,7 @@ package prom
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -42,59 +43,79 @@ func SetUpClient(server, bearertoken string) error {
 	}
 	promAPI = v1.NewAPI(client)
 
-
 	return nil
 }
 
-func GetJobsThatExportMetric(metric string) map[string]struct{} {
+func Series(matcher string, start, end string) int {
+	stime, etime, err := parseStartTimeAndEndTime(start, end)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return failureExitCode
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	metricsMetadata, err := promAPI.TargetsMetadata(ctx, "", metric, "")
+	val, _, err := promAPI.Series(ctx, []string{matcher}, stime, etime) // Ignoring warnings for now.
+
+	cancel()
+	if err != nil {
+		return handleAPIError(err)
+	}
+
+	return len(val)
+}
+
+func Rules() v1.RulesResult {
+	// Run query against client.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	rules, err := promAPI.Rules(ctx)
+
+	cancel()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error when preforming get to Rules endpoint:", err)
+		return v1.RulesResult{}
+	}
+
+	return rules
+}
+
+func MetricMetadata(metric string) []v1.MetricMetadata {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	metricMetadata, err := promAPI.TargetsMetadata(ctx, "", metric, "")
 
 	cancel()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error when preforming get to TargetMetadata endpoint:", err)
-		return map[string]struct{}{}
+		return []v1.MetricMetadata{}
 	}
 
-	jobsNamespaces := make(map[string]struct{})
-	for _, metricMetadata := range metricsMetadata {
-		identifier := metricMetadata.Target["namespace"] + "/" + metricMetadata.Target["job"]
-		jobsNamespaces[identifier] = struct{}{}
-	}
-	return jobsNamespaces
+	return metricMetadata
 }
 
-func GetIdentifierPerScrapeConfig() map[string]map[string]struct{} {
+func Targets() v1.TargetsResult {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	targets, err := promAPI.Targets(ctx)
 
 	cancel()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error when preforming get to Targets endpoint:", err)
-		return map[string]map[string]struct{}{}
+		return v1.TargetsResult{}
 	}
 
-	scrapeConfigIdentifiers := make(map[string]map[string]struct{})
-	for _, target := range targets.Active {
-		splitedScrapePool := strings.Split(target.ScrapePool, "/")
-		identifier := string(target.Labels["namespace"] + "/" + target.Labels["job"])
-		scrapeConfig := splitedScrapePool[1] + "/" + splitedScrapePool[2]
-		if identifiers, ok := scrapeConfigIdentifiers[scrapeConfig]; ok {
-			if _, ok := identifiers[identifier]; !ok {
-				identifiers[identifier] = struct{}{}
-			}
-		} else {
-			identifiers := make(map[string]struct{})
-			identifiers[identifier] = struct{}{}
-			scrapeConfigIdentifiers[scrapeConfig] = identifiers
-		}
-
-	}
-
-	return scrapeConfigIdentifiers
+	return targets
 }
 
 func ValidateTime(s string) error {
 	_, err := parseTime(s)
 	return err
+}
+
+func handleAPIError(err error) int {
+	var apiErr *v1.Error
+	if errors.As(err, &apiErr) && apiErr.Detail != "" {
+		fmt.Fprintf(os.Stderr, "query error: %v (detail: %s)\n", apiErr, strings.TrimSpace(apiErr.Detail))
+	} else {
+		fmt.Fprintln(os.Stderr, "query error:", err)
+	}
+
+	return failureExitCode
 }

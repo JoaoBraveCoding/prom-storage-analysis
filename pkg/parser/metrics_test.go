@@ -56,7 +56,7 @@ rate(alertmanager_notifications_total{job=~"alertmanager-main|alertmanager-user-
 		},
 	} {
 		t.Run(tc.name, func(t* testing.T){
-			resultExpressions := GetMetrics(tc.expression)
+			resultExpressions := Metrics(tc.expression)
 			sort.Strings(resultExpressions)
 			sort.Strings(tc.expectedMetrics)
 			for i, expectedMetric := range tc.expectedMetrics {

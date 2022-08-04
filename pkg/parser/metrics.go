@@ -4,7 +4,7 @@ import "github.com/prometheus/prometheus/promql/parser"
 
 // Extracts metrics used a PromQL expression
 // duplicates are removed
-func GetMetrics(expression string) []string {
+func Metrics(expression string) []string {
 	expr, err := parser.ParseExpr(expression)
 	if err != nil {
 		panic(err)
