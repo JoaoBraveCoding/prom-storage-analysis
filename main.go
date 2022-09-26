@@ -13,12 +13,13 @@ import (
 )
 
 var (
-	server           *string
-	pathToRulesFile  *string
-	bearertoken      *string
-	start            *string
-	end              *string
-	byServiceMonitor *bool
+	server                  *string
+	pathToRulesFile         *string
+	bearertoken             *string
+	start                   *string
+	end                     *string
+	byServiceMonitor        *bool
+	byServiceMonitorSummary *bool
 )
 
 func init() {
@@ -28,6 +29,7 @@ func init() {
 	start = flag.String("start", "", "Start time (RFC3339 or Unix timestamp).")
 	end = flag.String("end", "", "End time (RFC3339 or Unix timestamp).")
 	byServiceMonitor = flag.Bool("by-service-monitor", false, "Return metrics ordered by Service Monitor")
+	byServiceMonitorSummary = flag.Bool("by-service-monitor-summary", false, "Return metrics ordered by Service Monitor")
 }
 
 func main() {
@@ -40,6 +42,13 @@ func main() {
 		printMetricsPerMetricGenerator(*pathToRulesFile)
 		return
 	}
+
+	// By Service Monitor Summary Command
+	if *byServiceMonitorSummary {
+		printSeriesPerMetricGenerator(*pathToRulesFile)
+		return
+	}
+
 	// Regular Command (Metrics & Nb of Series)
 	printMetricsAndNumberOfSeries(*pathToRulesFile)
 }
@@ -70,37 +79,12 @@ func printMetricsAndNumberOfSeries(pathToRules string) {
 }
 
 func printMetricsPerMetricGenerator(pathToRules string) {
-	// Build a map with metrics and possible identifiers.
-	// An identifier is the concatenation of namespace + / + job values
-	// that we get for each metric using the Targets Metadata endpoint
-	expressions := processing.Expressions(prom.GetRules(pathToRules))
-	metricsIdentifiers := make(map[string]map[string]struct{})
-	for metric := range processing.Metrics(expressions) {
-		metricMetadata := prom.MetricMetadata(metric)
-		if len(metricMetadata) == 0 {
-			// Lookup for the parent metric name if it's a counter, histogram or summary.
-			for _, s := range []string{"_total", "_bucket", "_sum", "_count"} {
-				metricMetadata = prom.MetricMetadata(strings.TrimSuffix(metric, s))
-				if len(metricMetadata) > 0 {
-					break
-				}
-			}
-		}
-		metricsIdentifiers[metric] = processing.MetricIdentifiers(metric, metricMetadata)
-	}
-
-	// Compute and Print Metrics Per ServiceMonitor
-	targets := prom.Targets()
-	scrapeConfigsIdentifiers := processing.ScrapeConfigsIdentifiers(targets)
-	scrapeConfigsMetrics := processing.ScrapeConfigsMetrics(scrapeConfigsIdentifiers, metricsIdentifiers)
-	fmt.Println("Metrics Per ServiceMonitor")
+	metricsIdentifiers := metricsIdentifiers(pathToRules)
+	scrapeConfigsMetrics := metricPerScrapeConfig(metricsIdentifiers)
+	fmt.Println("Metrics Per ScrapeConfig")
 	printMapInOrder(scrapeConfigsMetrics)
 
-	// Not all metrics used in rules are exported by Monitors
-	// Compute and Print Metrics Per PrometheusRule (recording rules)
-	promRules := prom.GetRules(pathToRules)
-	promRulesRecordingRules := processing.PromRulesRecordingRules(promRules)
-	promRuleMetrics := processing.PromRuleMetrics(promRulesRecordingRules, metricsIdentifiers)
+	promRuleMetrics := metricPerPromRule(pathToRules, metricsIdentifiers)
 	fmt.Println("Metrics (recording rules) Per PrometheusRule")
 	printMapInOrder(promRuleMetrics)
 
@@ -126,6 +110,101 @@ func printMetricsPerMetricGenerator(pathToRules string) {
 		}
 	}
 
+}
+
+func printSeriesPerMetricGenerator(pathToRules string) {
+	metricsIdentifiers := metricsIdentifiers(pathToRules)
+	scrapeConfigsMetrics := metricPerScrapeConfig(metricsIdentifiers)
+	fmt.Println("Series Per ServiceMonitor")
+	printGeneratorNumberOfSeries(scrapeConfigsMetrics)
+
+	promRuleMetrics := metricPerPromRule(pathToRules, metricsIdentifiers)
+	fmt.Println("Metrics (recording rules) Per PrometheusRule")
+	printGeneratorNumberOfSeries(promRuleMetrics)
+
+	// Metrics not anywhere
+	fmt.Println("Metrics not exported by Service Monitor nor by PrometheusRule")
+	for metric, identifiers := range metricsIdentifiers {
+		if len(identifiers) == 0 {
+			found := false
+			for _, recordingRules := range promRuleMetrics {
+				for _, recordingRule := range recordingRules {
+					if recordingRule == metric {
+						found = true
+						break
+					}
+				}
+				if found {
+					break
+				}
+			}
+			if !found && prom.Series(metric, *start, *end) != 0 {
+				fmt.Println(metric, prom.Series(metric, *start, *end))
+			}
+		}
+	}
+
+}
+
+// Build a map with metrics and possible identifiers.
+// An identifier is the concatenation of namespace + / + job values
+// that we get for each metric using the Targets Metadata endpoint
+func metricsIdentifiers(pathToRules string) map[string]map[string]struct{} {
+	expressions := processing.Expressions(prom.GetRules(pathToRules))
+	metricsIdentifiers := make(map[string]map[string]struct{})
+	for metric := range processing.Metrics(expressions) {
+		metricMetadata := prom.MetricMetadata(metric)
+		if len(metricMetadata) == 0 {
+			// Lookup for the parent metric name if it's a counter, histogram or summary.
+			for _, s := range []string{"_total", "_bucket", "_sum", "_count"} {
+				metricMetadata = prom.MetricMetadata(strings.TrimSuffix(metric, s))
+				if len(metricMetadata) > 0 {
+					break
+				}
+			}
+		}
+		metricsIdentifiers[metric] = processing.MetricIdentifiers(metric, metricMetadata)
+	}
+	return metricsIdentifiers
+}
+
+// Compute Metrics Per ServiceMonitor
+func metricPerScrapeConfig(metricsIdentifiers map[string]map[string]struct{}) map[string][]string {
+	targets := prom.Targets()
+	scrapeConfigsIdentifiers := processing.ScrapeConfigsIdentifiers(targets)
+	return processing.ScrapeConfigsMetrics(scrapeConfigsIdentifiers, metricsIdentifiers)
+}
+
+// Not all metrics used in rules are exported by Monitors
+// Compute and Print Metrics Per PrometheusRule (recording rules)
+func metricPerPromRule(pathToRules string, metricsIdentifiers map[string]map[string]struct{}) map[string][]string {
+	promRules := prom.GetRules(pathToRules)
+	promRulesRecordingRules := processing.PromRulesRecordingRules(promRules)
+	return processing.PromRuleMetrics(promRulesRecordingRules, metricsIdentifiers)
+}
+
+func printGeneratorNumberOfSeries(generatorMetrics map[string][]string){
+	generatorNumberOfSeries := make(map[string]int)
+	order := make([]int, 0)
+	for generator, metrics := range generatorMetrics {
+		i := 0
+		for _, metric := range metrics {
+			i += prom.Series(metric, *start, *end)
+		}
+		generatorNumberOfSeries[generator] = i
+		order = append(order, i)
+	}
+
+	sort.Sort(sort.Reverse(sort.IntSlice(order)))
+	printed := make(map[string]struct{})
+	for _, nbSeries := range order {
+		for generator, series := range generatorNumberOfSeries {
+			if _, ok := printed[generator]; !ok && nbSeries == series {
+				printed[generator] = struct{}{}
+				fmt.Printf("%s %d\n", generator, nbSeries)
+			}
+		}
+	}
 }
 
 func toSortedArray(m map[string][]string) []string {
