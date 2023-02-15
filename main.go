@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"sort"
-	"strings"
 
 	"github.com/JoaoBraveCoding/prom-storage-analysis/pkg/processing"
 	"github.com/JoaoBraveCoding/prom-storage-analysis/pkg/prom"
@@ -37,7 +36,11 @@ func main() {
 
 	// By Service Monitor Command
 	if *byServiceMonitor {
-		printMetricsPerMetricGenerator(*pathToRulesFile)
+		metrics := metricsFromRules(*pathToRulesFile)
+		smMetrics := metricsPerServiceMonitor(metrics)
+		fmt.Println("Metrics Per ServiceMonitor")
+		printMapInOrder(smMetrics)
+		printMetricsNotExportedBySM(*pathToRulesFile, metrics)
 		return
 	}
 	// Regular Command (Metrics & Nb of Series)
@@ -69,35 +72,32 @@ func printMetricsAndNumberOfSeries(pathToRules string) {
 	}
 }
 
-func printMetricsPerMetricGenerator(pathToRules string) {
-	// Build a map with metrics and possible identifiers.
-	// An identifier is the concatenation of namespace + / + job values
-	// that we get for each metric using the Targets Metadata endpoint
+// metricsFromRules extract metrics from rules present in pathToRules, if path
+// is "" then get rules from Prometheus on localhost
+func metricsFromRules(pathToRules string) []string {
+	metrics := make([]string, 0)
 	expressions := processing.Expressions(prom.GetRules(pathToRules))
-	metricsIdentifiers := make(map[string]map[string]struct{})
 	for metric := range processing.Metrics(expressions) {
-		metricMetadata := prom.MetricMetadata(metric)
-		if len(metricMetadata) == 0 {
-			// Lookup for the parent metric name if it's a counter, histogram or summary.
-			for _, s := range []string{"_total", "_bucket", "_sum", "_count"} {
-				metricMetadata = prom.MetricMetadata(strings.TrimSuffix(metric, s))
-				if len(metricMetadata) > 0 {
-					break
-				}
-			}
-		}
-		metricsIdentifiers[metric] = processing.MetricIdentifiers(metric, metricMetadata)
+		metrics = append(metrics, metric)
 	}
+	return metrics
+}
+
+// metricsPerServiceMonitor generates map where key is ServiceMonitor
+// and value is an array of metrics exposed by that ServiceMonitor 
+func metricsPerServiceMonitor(metrics []string) map[string][]string {
+	metricsIdentifiers := processing.BuilMetricsIdentifiers(metrics)
 
 	// Compute and Print Metrics Per ServiceMonitor
 	targets := prom.Targets()
 	scrapeConfigsIdentifiers := processing.ScrapeConfigsIdentifiers(targets)
-	scrapeConfigsMetrics := processing.ScrapeConfigsMetrics(scrapeConfigsIdentifiers, metricsIdentifiers)
-	fmt.Println("Metrics Per ServiceMonitor")
-	printMapInOrder(scrapeConfigsMetrics)
+	return processing.ScrapeConfigsMetrics(scrapeConfigsIdentifiers, metricsIdentifiers)
+}
 
-	// Not all metrics used in rules are exported by Monitors
-	// Compute and Print Metrics Per PrometheusRule (recording rules)
+// Not all metrics used in rules are exported by Monitors
+// Compute and Print Metrics Per PrometheusRule (recording rules)
+func printMetricsNotExportedBySM(pathToRules string, metrics []string) {
+	metricsIdentifiers := processing.BuilMetricsIdentifiers(metrics)
 	promRules := prom.GetRules(pathToRules)
 	promRulesRecordingRules := processing.PromRulesRecordingRules(promRules)
 	promRuleMetrics := processing.PromRuleMetrics(promRulesRecordingRules, metricsIdentifiers)
@@ -125,7 +125,6 @@ func printMetricsPerMetricGenerator(pathToRules string) {
 			}
 		}
 	}
-
 }
 
 func toSortedArray(m map[string][]string) []string {
