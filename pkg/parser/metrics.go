@@ -2,8 +2,8 @@ package parser
 
 import "github.com/prometheus/prometheus/promql/parser"
 
-// Extracts metrics used a PromQL expression
-// duplicates are removed
+// Metrics takes a PromQL expression and extracts all the metrics in that
+// expression to a slice of strings. Duplicates will only show up once.
 func Metrics(expression string) []string {
 	expr, err := parser.ParseExpr(expression)
 	if err != nil {
