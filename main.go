@@ -4,63 +4,111 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"os"
 	"sort"
 
+	"github.com/JoaoBraveCoding/prom-storage-analysis/pkg/parser"
 	"github.com/JoaoBraveCoding/prom-storage-analysis/pkg/processing"
 	"github.com/JoaoBraveCoding/prom-storage-analysis/pkg/prom"
 )
 
 var (
-	server           *string
-	pathToRulesFile  *string
-	bearertoken      *string
-	start            *string
-	end              *string
-	byServiceMonitor *bool
+	cmd                *string
+	server             *string
+	metricsFile        *string
+	exprFile           *string
+	rulesFile          *string
+	bearertoken        *string
+	start              *string
+	end                *string
+	nonMatchingMetrics *bool
 )
 
 func init() {
+	cmd = flag.String("cmd", "rules", `Options are:
+  - metric-nb-series: the script will query rules/alerts from prometheus or a rules file and print for each metrics how many series exist in the TSDB.
+  - rules: (default) the script will query rules/alerts from prometheus or a rules file and for each ServiceMonitor it will print which metrics exposes.
+  - expressions-file: the script will read the file where each line is a PromQL expression and for each ServiceMonitor it will print which metrics exposes.
+  - metrics-file: the script will read the file where each line is a metric and for each ServiceMonitor it will print which metrics exposes.
+  - all: takes as source both the expression file and rules/alerts from prometheus or a rules file and or each ServiceMonitor it will print which metrics exposes.`)
 	server = flag.String("server", "http://localhost:9090/", "Prometheus server URL")
-	pathToRulesFile = flag.String("rules-file", "", "Path to a rules file in json from a mustgather")
+	metricsFile = flag.String("metrics-file", "", "File with list of metrics")
+	exprFile = flag.String("expressions-file", "", "File with list of PromQL expressions")
+	rulesFile = flag.String("rules-file", "", "File with rules file in json format, usualy taken from a mustgather")
 	bearertoken = flag.String("bearer-token", "", "Bearer Token to connect to the server")
 	start = flag.String("start", "", "Start time (RFC3339 or Unix timestamp).")
 	end = flag.String("end", "", "End time (RFC3339 or Unix timestamp).")
-	byServiceMonitor = flag.Bool("by-service-monitor", false, "Return metrics ordered by Service Monitor")
+	nonMatchingMetrics = flag.Bool("non-matching-metrics", false, "Return metrics do not match a Service Monitor")
 }
 
 func main() {
 
 	flag.Parse()
 	validateArguments()
+	var (
+		metrics []string
+		err     error
+	)
 
-	// By Service Monitor Command
-	if *byServiceMonitor {
-		metrics := metricsFromRules(*pathToRulesFile)
-		smMetrics := metricsPerServiceMonitor(metrics)
-		fmt.Println("Metrics Per ServiceMonitor")
-		printMapInOrder(smMetrics)
-		printMetricsNotExportedBySM(*pathToRulesFile, metrics)
-		return
+	switch {
+	case *cmd == "metric-nb-series":
+		printMetricsAndNumberOfSeries(*rulesFile)
+	case *cmd == "expressions-file":
+		if *exprFile == "" {
+			log.Fatal("error the \"expressions-file\" command requires the flag \"--expressions-file\" to be passed")
+		}
+		expressions, err := parser.ReadLines(*exprFile)
+		if err != nil {
+			log.Fatalf("error while reading expressions from file: %s", err)
+		}
+		for metric := range processing.Metrics(expressions) {
+			metrics = append(metrics, metric)
+		}
+	case *cmd == "metrics-file":
+		if *metricsFile == "" {
+			log.Fatal("error the \"metrics-file\" command requires the flag \"--metrics-file\" to be passed")
+		}
+		metrics, err = parser.ReadLines(*metricsFile)
+		if err != nil {
+			log.Fatalf("error while reading metrics from file: %s", err)
+		}
+	case *cmd == "all":
+		if *exprFile == "" {
+			log.Fatal("error the \"all\" command requires the flag \"--expressions-file\" to be passed")
+		}
+		expressions, err := parser.ReadLines(*exprFile)
+		if err != nil {
+			log.Fatalf("error while reading expressions from file: %s", err)
+		}
+		for metric := range processing.Metrics(expressions) {
+			metrics = append(metrics, metric)
+		}
+
+		metrics = append(metrics, metricsFromRules(*rulesFile)...)
+	case *cmd == "rules":
+		metrics = metricsFromRules(*rulesFile)
+	default:
+		log.Fatalf("error the command passed \"%s\" does not match any of the supported commands, run the script with \"--h\" to see the list of supported commands", *cmd)
 	}
-	// Regular Command (Metrics & Nb of Series)
-	printMetricsAndNumberOfSeries(*pathToRulesFile)
+
+	smMetrics := metricsPerServiceMonitor(metrics)
+	fmt.Println("Metrics Per ServiceMonitor")
+	printMapInOrder(smMetrics)
+	if *nonMatchingMetrics {
+		printMetricsNotExportedBySM(*rulesFile, metrics)
+	}
 }
 
 func validateArguments() {
 	if err := prom.SetUpClient(*server, *bearertoken); err != nil {
 		log.Fatalf("error could not set up client: %s", err)
-		os.Exit(1)
 	}
 
 	if err := prom.ValidateTime(*start); *start != "" && err != nil {
 		log.Fatalf("error parameter start %s", err)
-		os.Exit(1)
 	}
 
 	if err := prom.ValidateTime(*end); *end != "" && err != nil {
 		log.Fatalf("error parameter end %s", err)
-		os.Exit(1)
 	}
 }
 
@@ -84,7 +132,7 @@ func metricsFromRules(pathToRules string) []string {
 }
 
 // metricsPerServiceMonitor generates map where key is ServiceMonitor
-// and value is an array of metrics exposed by that ServiceMonitor 
+// and value is an array of metrics exposed by that ServiceMonitor
 func metricsPerServiceMonitor(metrics []string) map[string][]string {
 	metricsIdentifiers := processing.BuilMetricsIdentifiers(metrics)
 

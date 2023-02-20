@@ -36,6 +36,9 @@ func MetricIdentifiers(metric string, metricMetadata []v1.MetricMetadata) map[st
 func BuilMetricsIdentifiers(metrics []string) map[string]map[string]struct{} {
 	metricsIdentifiers := make(map[string]map[string]struct{})
 	for _, metric := range metrics {
+		if metric == "" {
+			continue
+		}
 		metricMetadata := prom.MetricMetadata(metric)
 		if len(metricMetadata) == 0 {
 			// Lookup for the parent metric name if it's a counter, histogram or summary.
